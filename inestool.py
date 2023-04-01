@@ -27,7 +27,7 @@ import logging
 import os
 import os.path
 import binascii
-from StringIO import StringIO
+from io import StringIO as StringIO
 import collections
 from xml.etree import ElementTree
 import tempfile
@@ -69,11 +69,11 @@ MIN_HEADER_READ_SIZE = 16
 
 def parse_header(header_bytes):
     assert len(header_bytes) >= MIN_HEADER_READ_SIZE, len(header_bytes)
-    if header_bytes.startswith("UNIF"):
+    if header_bytes.startswith(b"UNIF"):
         raise SkipROM("UNIF currently unsupported")
-    if not header_bytes.startswith("NES\x1a"):
+    if not header_bytes.startswith(b"NES\x1a"):
         return None
-    header_ints = [ord(byte) for byte in header_bytes]
+    header_ints = list(header_bytes)
     if header_ints[7] & 0xc == 8:
         raise SkipROM("NES 2.0 currently unsupported")
     if header_ints[6] & 4:
@@ -91,7 +91,7 @@ def parse_header(header_bytes):
         tv_system=header_ints[9] & 1)
 
 
-class FileInfo(object):
+class FileInfo:
     def __init__(self, name, crc32, rom_info, handler_data=None):
         self.name = name
         self.crc32 = crc32
@@ -99,7 +99,7 @@ class FileInfo(object):
         self.handler_data = handler_data
 
 
-class IOHandler(object):
+class IOHandler:
     def __iter__(self):
         raise NotImplementedError
 
@@ -107,7 +107,7 @@ class IOHandler(object):
         header_bytes = file_obj.read(MIN_HEADER_READ_SIZE)
         try:
             rom_info = parse_header(header_bytes)
-        except SkipROM, ex:
+        except SkipROM as ex:
             logging.warn("%s: %s", name, ex)
             raise
         if rom_info:
@@ -155,7 +155,7 @@ class WritableIOHandler(IOHandler):
                 raise Exception("unknown request type %r" % (request.type,))
 
 
-class UpdateRequest(object):
+class UpdateRequest:
     REQ_HEADER_INSERT = 1
     REQ_HEADER_REPLACE = 2
 
@@ -204,7 +204,7 @@ class ZipIOHandler(WritableIOHandler):
                 except (zipfile.BadZipfile, zlib.error) as ex:
                     logging.warn("can't read %s within %s: %s", name,
                                  self._path, ex)
-                except SkipROM, ex:
+                except (SkipROM, ex):
                     pass
 
     def update(self, requests):
@@ -216,7 +216,7 @@ class ZipIOHandler(WritableIOHandler):
                 dir=os.path.dirname(self._path), delete=False)
             temp_dir = tempfile.mkdtemp()
             with zipfile.ZipFile(self._path, "r") as orig_zip_file, \
-                 zipfile.ZipFile(temp_file, "w") as new_zip_file:
+                    zipfile.ZipFile(temp_file, "w") as new_zip_file:
                 for name in orig_zip_file.namelist():
                     member_path = orig_zip_file.extract(name, temp_dir)
                     requests = requests_by_file.pop(name, ())
@@ -224,7 +224,7 @@ class ZipIOHandler(WritableIOHandler):
                     new_zip_file.write(member_path, name, zipfile.ZIP_DEFLATED)
                     os.unlink(member_path)
             if requests_by_file:
-                print repr(requests)
+                print(repr(requests))
                 raise Exception("requests for unknown files: %s" %
                                 (", ".join(requests_by_file),))
             temp_file.close()
@@ -263,6 +263,7 @@ class SevenZipIOHandler(IOHandler):
 EXTENSION_TO_IO_HANDLER = {
     ".zip": ZipIOHandler,
 }
+
 if py7zlib:
     EXTENSION_TO_IO_HANDLER[".7z"] = SevenZipIOHandler
 
@@ -282,7 +283,7 @@ def format_chr_rom(value):
         return format_kib(value)
 
 
-class ROMInfo(object):
+class ROMInfo:
     MIRROR_HORIZONTAL = 0
     MIRROR_VERTICAL = 1
     MIRROR_FOUR_SCREEN = 8
@@ -587,43 +588,45 @@ def cmd_read(args):
     file_info_line = "{file_info.name} ({file_info.crc32}):"
     template_lines = [file_info_line]
     max_label_len = max(len(label)
-                        for label in ROMInfo.FIELD_LABELS.itervalues())
-    for attr, label in ROMInfo.FIELD_LABELS.iteritems():
+                        for (_, label) in ROMInfo.FIELD_LABELS.items())
+    for attr, label in ROMInfo.FIELD_LABELS.items():
         template_lines.append("\t%-*s: {formatted_rom_values[%s]}" %
                               (max_label_len, label, attr))
     formatters = tuple((attr, ROMInfo.FIELD_FORMATTERS.get(attr, str))
                        for attr in ROMInfo.FIELDS)
     template = "\n".join(template_lines)
+
     def print_rom_info(file_info):
         if file_info.rom_info:
             formatted_rom_values = {
                 attr: formatter(getattr(file_info.rom_info, attr))
                 for attr, formatter in formatters
             }
-            print template.format(file_info=file_info,
-                                  formatted_rom_values=formatted_rom_values)
+            print(template.format(file_info=file_info,
+                                  formatted_rom_values=formatted_rom_values))
         else:
-            print file_info_line.format(file_info=file_info), "no header"
+            print(file_info_line.format(file_info=file_info), "no header")
     visit_roms(args.roms, print_rom_info)
 
 
 def cmd_write(args):
     db = load_db(args.db)
     file_info_line = "{file_info.name} ({file_info.crc32}): {0}"
+
     def update_rom_header(file_info):
         db_rom_info = db.get(file_info.crc32)
         if not file_info.rom_info and not db_rom_info:
-            print file_info_line.format(
+            print(file_info_line.format(
                 "no header, not in database, cannot add header",
-                file_info=file_info)
+                file_info=file_info))
             return None
         elif not db_rom_info:
-            print file_info_line.format("not in database, skipping",
-                                        file_info=file_info)
+            print(file_info_line.format("not in database, skipping",
+                                        file_info=file_info))
             return None
         elif not file_info.rom_info:
-            print file_info_line.format("no header, will add header",
-                                        file_info=file_info)
+            print(file_info_line.format("no header, will add header",
+                                        file_info=file_info))
             if args.dry_run:
                 return None
             else:
@@ -632,17 +635,17 @@ def cmd_write(args):
                                      db_rom_info)
         diff = db_rom_info.diff(file_info.rom_info)
         if not diff:
-            print file_info_line.format("header matches database",
-                                        file_info=file_info)
+            print(file_info_line.format("header matches database",
+                                        file_info=file_info))
         else:
-            print file_info_line.format(
+            print(file_info_line.format(
                 "header differs from database, will update header",
-                file_info=file_info)
-            for attr, (db_val, header_val) in diff.iteritems():
+                file_info=file_info))
+            for attr, (db_val, header_val) in diff.items():
                 formatter = ROMInfo.FIELD_FORMATTERS.get(attr, str)
-                print "\t%s: expected %s, read %s" % (
+                print("\t%s: expected %s, read %s" % (
                     ROMInfo.FIELD_LABELS[attr],
-                    formatter(db_val), formatter(header_val))
+                    formatter(db_val), formatter(header_val)))
             if args.dry_run:
                 return None
             else:
@@ -654,15 +657,19 @@ def cmd_write(args):
 
 def main():
     logging.basicConfig()
+
     parser = argparse.ArgumentParser()
     roms_help = "ROM files, or archives containing ROMs"
+
     # XXX Currently nothing logs at anything other than warn.  See
     # commented code below, too.
     # parser.add_argument("--verbose", "-v", default=False, action="store_true")
     subparsers = parser.add_subparsers()
+
     read_parser = subparsers.add_parser("read", help="read iNES headers")
     read_parser.set_defaults(handler=cmd_read)
     read_parser.add_argument("roms", nargs="+", metavar="rom", help=roms_help)
+
     write_parser = subparsers.add_parser(
         "write", help="add/correct iNES headers from database")
     write_parser.set_defaults(handler=cmd_write)
